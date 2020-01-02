@@ -492,9 +492,12 @@ class MySqlTaskState(object):
         session = self.session()
         db_res = session.query(DBTask).filter(DBTask.status.in_(statuses)).all()
         end = time.time()
-        logger.info("Query now took {} msec".format(end-start))
+        logger.info("Query now took {} sec".format(end-start))
         session.close()
-        return (pickle.loads(t.pickled) for t in db_res)
+        res = [pickle.loads(t.pickled) for t in db_res]
+        end2 = time.time()
+        logger.info("Depickling now took {} sec".format(end2 - end))
+        return res
 
     def get_active_task_count_for_status(self, status):
         if status:
