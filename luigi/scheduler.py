@@ -1240,7 +1240,7 @@ class Scheduler(object):
             task.runnable = runnable
 
         self._state.inactivate_tasks([task])
-        self.state.get_task(task_id, setdefault=task)
+        self._state.get_task(task_id, setdefault=task)
 
     @rpc_method()
     def announce_scheduling_failure(self, task_name, family, params, expl, owners, **kwargs):
