@@ -1239,6 +1239,9 @@ class Scheduler(object):
             self._state.get_worker(worker_id).tasks.add(task)
             task.runnable = runnable
 
+        self._state.inactivate_tasks([task])
+        self.state.get_task(task_id, setdefault=task)
+
     @rpc_method()
     def announce_scheduling_failure(self, task_name, family, params, expl, owners, **kwargs):
         if not self._config.batch_emails:
@@ -1481,6 +1484,8 @@ class Scheduler(object):
                                   for worker in active_workers)
         tasks = list(relevant_tasks)
         tasks.sort(key=self._rank, reverse=True)
+
+        logger.info("get work task list: {}".format(tasks))
 
         for task in tasks:
             if (best_task and batched_params and task.family == best_task.family and
