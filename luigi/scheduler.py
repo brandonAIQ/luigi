@@ -488,6 +488,7 @@ class MySqlTaskState(object):
         return (pickle.loads(t.pickled) for t in db_res)
 
     def get_active_tasks_by_status(self, *statuses):
+        return []
         session = self.session()
         db_res = session.query(DBTask).filter(DBTask.status.in_(statuses)).all()
         session.close()
