@@ -1378,8 +1378,9 @@ class Scheduler(object):
         running_tasks = []
 
         upstream_status_table = {}
+        all_task_dict = {task.id: task for task in self._state.get_active_tasks()}
+
         for task in worker.get_tasks(self._state, RUNNING):
-            all_task_dict = {task.id: task for task in self._state.get_active_tasks()}
             if self._upstream_status(task.id, upstream_status_table, all_task_dict) == UPSTREAM_DISABLED:
                 continue
             # Return a list of currently running tasks to the client,
@@ -1391,7 +1392,6 @@ class Scheduler(object):
                 running_tasks.append(more_info)
 
         for task in worker.get_tasks(self._state, PENDING, FAILED):
-            all_task_dict = {task.id: task for task in self._state.get_active_tasks()}
             if self._upstream_status(task.id, upstream_status_table, all_task_dict) == UPSTREAM_DISABLED:
                 continue
             num_pending += 1
@@ -1735,8 +1735,8 @@ class Scheduler(object):
                 return all(term in t.pretty_id for term in terms)
 
         tasks = self._state.get_active_tasks_by_status(status) if status else self._state.get_active_tasks()
+        all_task_dict = {task.id: task for task in self._state.get_active_tasks()}
         for task in filter(filter_func, tasks):
-            all_task_dict = {task.id: task for task in self._state.get_active_tasks()}
             if task.status != PENDING or not upstream_status or upstream_status == self._upstream_status(
                 task.id,
                 upstream_status_table,
