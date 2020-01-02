@@ -1561,6 +1561,9 @@ class Scheduler(object):
             best_task.time_running = time.time()
             self._update_task_history(best_task, RUNNING, host=host)
 
+            self._state.inactivate_tasks([best_task])
+            self._state.get_task(best_task.id, setdefault=best_task)
+
             reply['task_id'] = best_task.id
             reply['task_family'] = best_task.family
             reply['task_module'] = getattr(best_task, 'module', None)
