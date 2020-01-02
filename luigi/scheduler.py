@@ -144,7 +144,7 @@ class scheduler(Config):
     batch_emails = parameter.BoolParameter(default=False, description="Send e-mails in batches rather than immediately")
 
     use_mysql_state = parameter.BoolParameter(default=False, description="Use experimental MySQL db to back Luigi state")
-    mysql_target = parameter.Parameter(default="", description="user:pass@host:port/database -- for use with MySQL state")
+    mysql_target = parameter.Parameter(default="", description="mysql://user:pass@host:port/db -- use with MySQL state")
 
     # Jobs are disabled if we see more than retry_count failures in disable_window seconds.
     # These disables last for disable_persist seconds.
