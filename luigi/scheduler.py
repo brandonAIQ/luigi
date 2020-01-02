@@ -467,7 +467,8 @@ class MySqlTaskState(object):
     """
 
     def __init__(self, mysql_target):
-        self.engine = create_engine(mysql_target, pool_size=10, max_overflow=20)
+        from sqlalchemy.pool import NullPool
+        self.engine = create_engine(mysql_target, poolclass=NullPool)
         Base.metadata.create_all(self.engine)
         self.session = sessionmaker(bind=self.engine)
 
