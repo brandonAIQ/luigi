@@ -56,6 +56,14 @@ from luigi.parameter import ParameterVisibility
 
 from luigi.metrics import MetricsCollectors
 
+
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Table, Column, Integer, String
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+Base = declarative_base()
+
 logger = logging.getLogger(__name__)
 
 UPSTREAM_RUNNING = 'UPSTREAM_RUNNING'
@@ -392,7 +400,7 @@ class Worker(object):
 
     def get_tasks(self, state, *statuses):
         num_self_tasks = len(self.tasks)
-        num_state_tasks = sum(len(state._status_tasks[status]) for status in statuses)
+        num_state_tasks = sum(len(list(state.get_active_tasks_by_status(status))) for status in statuses)
         if num_self_tasks < num_state_tasks:
             return six.moves.filter(lambda task: task.status in statuses, self.tasks)
         else:
@@ -435,6 +443,234 @@ class Worker(object):
 
     def __str__(self):
         return self.id
+
+
+class DBTask(Base):
+
+    __tablename__ = 'luigi_task'
+
+    task_id = Column(String(255), primary_key=True)
+    status = Column(String(100))
+    pickled = Column(String(10000))
+
+
+class SqlTaskState(object):
+    """
+    Keep track of the current state and handle persistance.
+
+    The point of this class is to enable other ways to keep state, eg. by using a database
+    These will be implemented by creating an abstract base class that this and other classes
+    inherit from.
+    """
+
+    def __init__(self, table_name):
+        self.engine = create_engine(table_name, pool_size=10, max_overflow=20)
+        Base.metadata.create_all(self.engine)
+        self.session = sessionmaker(bind=self.engine)
+
+        self._active_workers = {}  # map from id to a Worker object
+        self._metrics_collector = None
+
+    def dump(self):
+        pass # always persisted
+
+    def load(self):
+        pass # always persisted
+
+    def get_active_tasks(self):
+        db_res = self.session().query(DBTask).all()
+        return (pickle.loads(t.pickled) for t in db_res)
+
+    def get_active_tasks_by_status(self, *statuses):
+        db_res = self.session().query(DBTask).filter(DBTask.status.in_(statuses)).all()
+        return (pickle.loads(t.pickled) for t in db_res)
+
+    def get_active_task_count_for_status(self, status):
+        if status:
+            return self.session().query(DBTask).filter(DBTask.status == status).count()
+        else:
+            return self.session().query(DBTask).count()
+
+    def get_batch_running_tasks(self, batch_id):
+        return []
+
+    def set_batcher(self, worker_id, family, batcher_args, max_batch_size):
+        raise NotImplementedError("No batch running right now")
+
+    def get_batcher(self, worker_id, family):
+        # raise NotImplementedError("No batch running right now")
+        return None, None
+
+    def num_pending_tasks(self):
+        return self.session().query(DBTask).filter(DBTask.status.in_([PENDING, RUNNING])).count()
+
+    def get_task(self, task_id, default=None, setdefault=None):
+        if self.has_task(task_id):
+            db_task = self.session().query(DBTask).filter(DBTask.task_id == task_id).first()
+            return pickle.loads(db_task.pickled)
+        elif setdefault:
+            new_task = DBTask(task_id=task_id, status=setdefault.status, pickled=pickle.dumps(setdefault))
+            session = self.session()
+            session.add(new_task)
+            session.commit()
+            return setdefault
+        else:
+            return default
+
+    def has_task(self, task_id):
+        return self.session().query(DBTask).filter(DBTask.task_id == task_id).count() > 0
+
+    def re_enable(self, task, config=None):
+        task.scheduler_disable_time = None
+        task.failures.clear()
+        if config:
+            self.set_status(task, FAILED, config)
+            task.failures.clear()
+
+    def set_batch_running(self, task, batch_id, worker_id):
+        raise NotImplementedError("No batch running right now")
+
+    def set_status(self, task, new_status, config=None):
+        if new_status == FAILED:
+            assert config is not None
+
+        if new_status == DISABLED and task.status in (RUNNING, BATCH_RUNNING):
+            return
+
+        remove_on_failure = task.batch_id is not None and not task.batchable
+
+        if task.status == DISABLED:
+            if new_status == DONE:
+                self.re_enable(task)
+
+            # don't allow workers to override a scheduler disable
+            elif task.scheduler_disable_time is not None and new_status != DISABLED:
+                return
+
+        if task.status == RUNNING and task.batch_id is not None and new_status != RUNNING:
+            for batch_task in self.get_batch_running_tasks(task.batch_id):
+                self.set_status(batch_task, new_status, config)
+                batch_task.batch_id = None
+            task.batch_id = None
+
+        if new_status == FAILED and task.status != DISABLED:
+            task.add_failure()
+            if task.has_excessive_failures():
+                task.scheduler_disable_time = time.time()
+                new_status = DISABLED
+                if not config.batch_emails:
+                    notifications.send_error_email(
+                        'Luigi Scheduler: DISABLED {task} due to excessive failures'.format(task=task.id),
+                        '{task} failed {failures} times in the last {window} seconds, so it is being '
+                        'disabled for {persist} seconds'.format(
+                            failures=task.retry_policy.retry_count,
+                            task=task.id,
+                            window=config.disable_window,
+                            persist=config.disable_persist,
+                        ))
+        elif new_status == DISABLED:
+            task.scheduler_disable_time = None
+
+        if new_status != task.status:
+            session = self.session()
+            db_task = session.query(DBTask).filter(DBTask.task_id == task.id).first()
+            db_task.status = new_status
+            session.commit()
+            task.status = new_status
+            task.updated = time.time()
+            self.update_metrics(task, config)
+
+        if new_status == FAILED:
+            task.retry = time.time() + config.retry_delay
+            if remove_on_failure:
+                task.remove = time.time()
+
+    def fail_dead_worker_task(self, task, config, assistants):
+        # If a running worker disconnects, tag all its jobs as FAILED and subject it to the same retry logic
+        if task.status in (BATCH_RUNNING, RUNNING) and task.worker_running and task.worker_running not in task.stakeholders | assistants:
+            logger.info("Task %r is marked as running by disconnected worker %r -> marking as "
+                        "FAILED with retry delay of %rs", task.id, task.worker_running,
+                        config.retry_delay)
+            task.worker_running = None
+            self.set_status(task, FAILED, config)
+            task.retry = time.time() + config.retry_delay
+
+    def update_status(self, task, config):
+        # Mark tasks with no remaining active stakeholders for deletion
+        if (not task.stakeholders) and (task.remove is None) and (task.status != RUNNING):
+            # We don't check for the RUNNING case, because that is already handled
+            # by the fail_dead_worker_task function.
+            logger.debug("Task %r has no stakeholders anymore -> might remove "
+                         "task in %s seconds", task.id, config.remove_delay)
+            task.remove = time.time() + config.remove_delay
+
+        # Re-enable task after the disable time expires
+        if task.status == DISABLED and task.scheduler_disable_time is not None:
+            if time.time() - task.scheduler_disable_time > config.disable_persist:
+                self.re_enable(task, config)
+
+        # Reset FAILED tasks to PENDING if max timeout is reached, and retry delay is >= 0
+        if task.status == FAILED and config.retry_delay >= 0 and task.retry < time.time():
+            self.set_status(task, PENDING, config)
+
+    def may_prune(self, task):
+        return task.remove and time.time() >= task.remove
+
+    def inactivate_tasks(self, delete_tasks):
+        # The terminology is a bit confusing: we used to "delete" tasks when they became inactive,
+        # but with a pluggable state storage, you might very well want to keep some history of
+        # older tasks as well. That's why we call it "inactivate" (as in the verb)
+        for task in delete_tasks:
+            session = self.session()
+            db_task = session.query(DBTask).filter(DBTask.task_id == task.id).first()
+            session.delete(db_task)
+            session.commit()
+
+    def get_active_workers(self, last_active_lt=None, last_get_work_gt=None):
+        for worker in six.itervalues(self._active_workers):
+            if last_active_lt is not None and worker.last_active >= last_active_lt:
+                continue
+            last_get_work = worker.last_get_work
+            if last_get_work_gt is not None and (
+                            last_get_work is None or last_get_work <= last_get_work_gt):
+                continue
+            yield worker
+
+    def get_assistants(self, last_active_lt=None):
+        return filter(lambda w: w.assistant, self.get_active_workers(last_active_lt))
+
+    def get_worker_ids(self):
+        return self._active_workers.keys()  # only used for unit tests
+
+    def get_worker(self, worker_id):
+        return self._active_workers.setdefault(worker_id, Worker(worker_id))
+
+    def inactivate_workers(self, delete_workers):
+        # Mark workers as inactive
+        for worker in delete_workers:
+            self._active_workers.pop(worker)
+        self._remove_workers_from_tasks(delete_workers)
+
+    def _remove_workers_from_tasks(self, workers, remove_stakeholders=True):
+        for task in self.get_active_tasks():
+            if remove_stakeholders:
+                task.stakeholders.difference_update(workers)
+            task.workers -= workers
+
+    def disable_workers(self, worker_ids):
+        self._remove_workers_from_tasks(worker_ids, remove_stakeholders=False)
+        for worker_id in worker_ids:
+            worker = self.get_worker(worker_id)
+            worker.disabled = True
+            worker.tasks.clear()
+
+    def update_metrics(self, task, config):
+        if task.status == DISABLED:
+            self._metrics_collector.handle_task_disabled(task, config)
+        elif task.status == DONE:
+            self._metrics_collector.handle_task_done(task)
+        elif task.status == FAILED:
+            self._metrics_collector.handle_task_failed(task)
 
 
 class SimpleTaskState(object):
@@ -700,7 +936,10 @@ class Scheduler(object):
         :param task_history_impl: ignore config and use this object as the task history
         """
         self._config = config or scheduler(**kwargs)
-        self._state = SimpleTaskState(self._config.state_path)
+
+        if self._config.use_sql_state:
+
+        self._state = SqlTaskState("SECRET")
 
         if task_history_impl:
             self._task_history = task_history_impl
@@ -1213,8 +1452,7 @@ class Scheduler(object):
                 in_workers = (assistant and task.runnable) or worker_id in task.workers
                 if in_workers and self._has_resources(task.resources, used_resources):
                     best_task = task
-                    batch_param_names, max_batch_size = self._state.get_batcher(
-                        worker_id, task.family)
+                    batch_param_names, max_batch_size = self._state.get_batcher(worker_id, task.family)
                     if batch_param_names and task.is_batchable():
                         try:
                             batched_params = {
