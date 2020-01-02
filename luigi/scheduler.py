@@ -537,8 +537,10 @@ class MySqlTaskState(object):
             return default
 
     def has_task(self, task_id):
-
-        return res
+        session = self.session()
+        db_res = session.query(DBTask).filter(DBTask.task_id == task_id).count() > 0
+        session.close()
+        return db_res
 
     def re_enable(self, task, config=None):
         task.scheduler_disable_time = None
