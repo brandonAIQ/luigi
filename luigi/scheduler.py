@@ -143,6 +143,9 @@ class scheduler(Config):
 
     batch_emails = parameter.BoolParameter(default=False, description="Send e-mails in batches rather than immediately")
 
+    use_mysql_state = parameter.BoolParameter(default=False, description="Use experimental MySQL db to back Luigi state")
+    mysql_target = parameter.Parameter(default="", description="user:pass@host:port/database -- for use with MySQL state")
+
     # Jobs are disabled if we see more than retry_count failures in disable_window seconds.
     # These disables last for disable_persist seconds.
     disable_window = parameter.IntParameter(default=3600)
@@ -454,7 +457,7 @@ class DBTask(Base):
     pickled = Column(String(10000))
 
 
-class SqlTaskState(object):
+class MySqlTaskState(object):
     """
     Keep track of the current state and handle persistance.
 
@@ -463,8 +466,8 @@ class SqlTaskState(object):
     inherit from.
     """
 
-    def __init__(self, table_name):
-        self.engine = create_engine(table_name, pool_size=10, max_overflow=20)
+    def __init__(self, mysql_target):
+        self.engine = create_engine(mysql_target, pool_size=10, max_overflow=20)
         Base.metadata.create_all(self.engine)
         self.session = sessionmaker(bind=self.engine)
 
@@ -938,8 +941,9 @@ class Scheduler(object):
         self._config = config or scheduler(**kwargs)
 
         if self._config.use_sql_state:
-
-        self._state = SqlTaskState("SECRET")
+            self._state = MySqlTaskState(self._config.mysql_target)
+        else:
+            self._state = SimpleTaskState(self._config.state_path)
 
         if task_history_impl:
             self._task_history = task_history_impl
