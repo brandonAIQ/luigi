@@ -1533,6 +1533,8 @@ class Scheduler(object):
 
                             break
 
+        logger.info("BEST TASK: {}".format(best_task))
+
         reply = self.count_pending(worker_id)
 
         if len(batched_tasks) > 1:
