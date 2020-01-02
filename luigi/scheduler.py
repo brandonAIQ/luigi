@@ -940,7 +940,7 @@ class Scheduler(object):
         """
         self._config = config or scheduler(**kwargs)
 
-        if self._config.use_sql_state:
+        if self._config.use_mysql_state:
             self._state = MySqlTaskState(self._config.mysql_target)
         else:
             self._state = SimpleTaskState(self._config.state_path)
