@@ -481,18 +481,28 @@ class MySqlTaskState(object):
         pass # always persisted
 
     def get_active_tasks(self):
-        db_res = self.session().query(DBTask).all()
+        session = self.session()
+        db_res = session.query(DBTask).all()
+        session.close()
         return (pickle.loads(t.pickled) for t in db_res)
 
     def get_active_tasks_by_status(self, *statuses):
-        db_res = self.session().query(DBTask).filter(DBTask.status.in_(statuses)).all()
+        session = self.session()
+        db_res = session.query(DBTask).filter(DBTask.status.in_(statuses)).all()
+        session.close()
         return (pickle.loads(t.pickled) for t in db_res)
 
     def get_active_task_count_for_status(self, status):
         if status:
-            return self.session().query(DBTask).filter(DBTask.status == status).count()
+            session = self.session()
+            db_res = session.query(DBTask).filter(DBTask.status == status).count()
+            session.close()
+            return db_res
         else:
-            return self.session().query(DBTask).count()
+            session = self.session()
+            db_res = session.query(DBTask).count()
+            session.close()
+            return db_res
 
     def get_batch_running_tasks(self, batch_id):
         return []
@@ -505,23 +515,30 @@ class MySqlTaskState(object):
         return None, None
 
     def num_pending_tasks(self):
-        return self.session().query(DBTask).filter(DBTask.status.in_([PENDING, RUNNING])).count()
+        session = self.session()
+        db_res = session.query(DBTask).filter(DBTask.status.in_([PENDING, RUNNING])).count()
+        session.close()
+        return db_res
 
     def get_task(self, task_id, default=None, setdefault=None):
         if self.has_task(task_id):
-            db_task = self.session().query(DBTask).filter(DBTask.task_id == task_id).first()
+            session = self.session()
+            db_task = session.query(DBTask).filter(DBTask.task_id == task_id).first()
+            session.close()
             return pickle.loads(db_task.pickled)
         elif setdefault:
             new_task = DBTask(task_id=task_id, status=setdefault.status, pickled=pickle.dumps(setdefault))
             session = self.session()
             session.add(new_task)
             session.commit()
+            session.close()
             return setdefault
         else:
             return default
 
     def has_task(self, task_id):
-        return self.session().query(DBTask).filter(DBTask.task_id == task_id).count() > 0
+
+        return res
 
     def re_enable(self, task, config=None):
         task.scheduler_disable_time = None
@@ -579,6 +596,7 @@ class MySqlTaskState(object):
             db_task = session.query(DBTask).filter(DBTask.task_id == task.id).first()
             db_task.status = new_status
             session.commit()
+            session.close()
             task.status = new_status
             task.updated = time.time()
             self.update_metrics(task, config)
@@ -628,6 +646,7 @@ class MySqlTaskState(object):
             db_task = session.query(DBTask).filter(DBTask.task_id == task.id).first()
             session.delete(db_task)
             session.commit()
+            session.close()
 
     def get_active_workers(self, last_active_lt=None, last_get_work_gt=None):
         for worker in six.itervalues(self._active_workers):
