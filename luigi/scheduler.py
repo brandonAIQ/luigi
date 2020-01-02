@@ -483,27 +483,19 @@ class MySqlTaskState(object):
         pass # always persisted
 
     def get_active_tasks(self):
-        logger.info("Called method get_active_tasks!")
         session = self.session()
         db_res = session.query(DBTask).all()
         session.close()
         return (pickle.loads(t.pickled) for t in db_res)
 
     def get_active_tasks_by_status(self, *statuses):
-        logger.info("Called method get_active_tasks_by_status!")
-        start = time.time()
         session = self.session()
         db_res = session.query(DBTask).filter(DBTask.status.in_(statuses)).all()
-        end = time.time()
-        logger.info("Query now took {} sec".format(end-start))
         session.close()
         res = [pickle.loads(t.pickled) for t in db_res]
-        end2 = time.time()
-        logger.info("Depickling now took {} sec".format(end2 - end))
         return res
 
     def get_active_task_count_for_status(self, status):
-        logger.info("Called method get_active_task_count_for_status!")
         if status:
             session = self.session()
             db_res = session.query(DBTask).filter(DBTask.status == status).count()
@@ -530,14 +522,12 @@ class MySqlTaskState(object):
         return self._task_batchers.get(worker_id, {}).get(family, (None, 1))
 
     def num_pending_tasks(self):
-        logger.info("Called method num_pending_tasks!")
         session = self.session()
         db_res = session.query(DBTask).filter(DBTask.status.in_([PENDING, RUNNING])).count()
         session.close()
         return db_res
 
     def get_task(self, task_id, default=None, setdefault=None):
-        logger.info("Called method get_task!")
         if self.has_task(task_id):
             session = self.session()
             db_task = session.query(DBTask).filter(DBTask.task_id == task_id).first()
@@ -554,7 +544,6 @@ class MySqlTaskState(object):
             return default
 
     def has_task(self, task_id):
-        logger.info("Called method has_task!")
         session = self.session()
         db_res = session.query(DBTask).filter(DBTask.task_id == task_id).count() > 0
         session.close()
@@ -575,7 +564,6 @@ class MySqlTaskState(object):
         self.set_status(task, BATCH_RUNNING)
 
     def set_status(self, task, new_status, config=None):
-        logger.info("Called method set_status!")
         if new_status == FAILED:
             assert config is not None
 
