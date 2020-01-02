@@ -472,6 +472,7 @@ class MySqlTaskState(object):
         Base.metadata.create_all(self.engine)
         self.session = sessionmaker(bind=self.engine)
 
+        self._task_batchers = {}
         self._active_workers = {}  # map from id to a Worker object
         self._metrics_collector = None
 
@@ -515,14 +516,18 @@ class MySqlTaskState(object):
             return db_res
 
     def get_batch_running_tasks(self, batch_id):
-        return []
+        assert batch_id is not None
+        return [
+            task for task in self.get_active_tasks_by_status(BATCH_RUNNING)
+            if task.batch_id == batch_id
+        ]
 
     def set_batcher(self, worker_id, family, batcher_args, max_batch_size):
-        raise NotImplementedError("No batch running right now")
+        self._task_batchers.setdefault(worker_id, {})
+        self._task_batchers[worker_id][family] = (batcher_args, max_batch_size)
 
     def get_batcher(self, worker_id, family):
-        # raise NotImplementedError("No batch running right now")
-        return None, None
+        return self._task_batchers.get(worker_id, {}).get(family, (None, 1))
 
     def num_pending_tasks(self):
         logger.info("Called method num_pending_tasks!")
@@ -563,7 +568,11 @@ class MySqlTaskState(object):
             task.failures.clear()
 
     def set_batch_running(self, task, batch_id, worker_id):
-        raise NotImplementedError("No batch running right now")
+        task.batch_id = batch_id
+        task.worker_running = worker_id
+        task.resources_running = task.resources
+        task.time_running = time.time()
+        self.set_status(task, BATCH_RUNNING)
 
     def set_status(self, task, new_status, config=None):
         logger.info("Called method set_status!")
