@@ -127,8 +127,8 @@ section and the parameters available within it.
 These parameters control core Luigi behavior, such as error e-mails and
 interactions between the worker and scheduler.
 
-autoload-range
-  .. versionadded:: 2.8.4
+autoload_range
+  .. versionadded:: 2.8.11
 
   If false, prevents range tasks from autoloading. They can still be loaded
   using ``--module luigi.tools.range``. Defaults to true. Setting this to true
@@ -844,7 +844,7 @@ apikey
 These parameters control the smtp server setup.
 
 host
-  Hostname for sending mail throug smtp. Defaults to localhost.
+  Hostname for sending mail through smtp. Defaults to localhost.
 
 local_hostname
   If specified, overrides the FQDN of localhost in the HELO/EHLO

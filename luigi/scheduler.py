@@ -165,6 +165,12 @@ class scheduler(Config):
 
     metrics_collector = parameter.EnumParameter(enum=MetricsCollectors, default=MetricsCollectors.default)
 
+    stable_done_cooldown_secs = parameter.IntParameter(default=10,
+                                                       description="Sets cooldown period to avoid running the same task twice")
+    """
+    Sets a cooldown period in seconds after a task was completed, during this period the same task will not accepted by the scheduler.
+    """
+
     def _get_retry_policy(self):
         return RetryPolicy(self.retry_count, self.disable_hard_timeout, self.disable_window)
 
@@ -710,7 +716,7 @@ class MySqlTaskState(object):
 
 class SimpleTaskState(object):
     """
-    Keep track of the current state and handle persistance.
+    Keep track of the current state and handle persistence.
 
     The point of this class is to enable other ways to keep state, eg. by using a database
     These will be implemented by creating an abstract base class that this and other classes
@@ -1124,6 +1130,10 @@ class Scheduler(object):
         if task is None or (task.status != RUNNING and not worker.enabled):
             return
 
+        # Ignore claims that the task is PENDING if it very recently was marked as DONE.
+        if status == PENDING and task.status == DONE and (time.time() - task.updated) < self._config.stable_done_cooldown_secs:
+            return
+
         # for setting priority, we'll sometimes create tasks with unset family and params
         if not task.family:
             task.family = family
@@ -1282,6 +1292,10 @@ class Scheduler(object):
             task = self._state.get_task(task_id)
             response = task.scheduler_message_responses.pop(message_id, None)
         return {"response": response}
+
+    @rpc_method()
+    def has_task_history(self):
+        return self._config.record_task_history
 
     @rpc_method()
     def is_pause_enabled(self):

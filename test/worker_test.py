@@ -123,7 +123,7 @@ class DummyErrorTask(Task):
 class WorkerTest(LuigiTestCase):
 
     def run(self, result=None):
-        self.sch = Scheduler(retry_delay=100, remove_delay=1000, worker_disconnect_delay=10)
+        self.sch = Scheduler(retry_delay=100, remove_delay=1000, worker_disconnect_delay=10, stable_done_cooldown_secs=0)
         self.time = time.time
         with Worker(scheduler=self.sch, worker_id='X') as w, Worker(scheduler=self.sch, worker_id='Y') as w2:
             self.w = w
@@ -993,7 +993,7 @@ class WorkerDisabledTest(LuigiTestCase):
     def _test_stop_getting_new_work_build(self, sch, worker):
         """
         I got motivated to create this test case when I saw that the
-        execution_summary crashed after my first attemted solution.
+        execution_summary crashed after my first attempted solution.
         """
         class KillWorkerTask(luigi.Task):
             did_actually_run = False
