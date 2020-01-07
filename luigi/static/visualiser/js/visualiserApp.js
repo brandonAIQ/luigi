@@ -49,6 +49,7 @@ function visualiserApp(luigi) {
 
     function taskToDisplayTask(task) {
         var taskName = task.name;
+        var taskParams = JSON.stringify(task.params);
         var displayTime = new Date(Math.floor(task.last_updated*1000)).toLocaleString();
         var time_running = -1;
         if (task.status == "RUNNING" && "time_running" in task) {
@@ -61,8 +62,7 @@ function visualiserApp(luigi) {
             taskId: task.taskId,
             encodedTaskId: encodeURIComponent(task.taskId),
             taskName: taskName,
-            taskParamsObj: task.params,
-            taskParams: JSON.stringify(task.params),
+            taskParams: taskParams,
             displayName: task.display_name,
             priority: task.priority,
             resources: JSON.stringify(task.resources_running || task.resources).replace(/,"/g, ', "'),
@@ -75,8 +75,6 @@ function visualiserApp(luigi) {
             error: task.status == "FAILED",
             re_enable: task.status == "DISABLED" && task.re_enable_able,
             mark_as_done: (task.status == "RUNNING" || task.status == "FAILED" || task.status == "DISABLED"),
-            view_logs_able: ("trace_id" in task.params) && (task.status != "PENDING"),
-            view_graph_able: "customer_id" in task.params,
             statusMessage: task.status_message,
             progressPercentage: task.progress_percentage,
             acceptsMessages: task.accepts_messages,
@@ -410,15 +408,6 @@ function visualiserApp(luigi) {
         $modal.on("shown.bs.modal", function() {
             $input.focus();
         });
-
-        $input.val("kill");
-        $awaitResponse.prop( "checked", true );
-
-        $send.trigger("click");
-
-        $input.prop('disabled', true);
-        $awaitResponse.prop('disabled', true);
-        $send.prop('disabled', true);
 
         $modal.modal({});
     }
@@ -1137,6 +1126,15 @@ function visualiserApp(luigi) {
 
     $(document).ready(function() {
         loadTemplates();
+
+        luigi.hasTaskHistory(function(hasTaskHistory) {
+            if (hasTaskHistory) {
+                $('#topNavbar').append(renderTemplate('topNavbarItem', {
+                    label: "History",
+                    href: "../../history",
+                }).children()[0]);
+            }
+        });
 
         luigi.isPauseEnabled(function(enabled) {
             if (enabled) {

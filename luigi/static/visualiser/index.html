@@ -31,37 +31,18 @@
         <script type="text/template" name="actionsTemplate">
             <div class="span2">
                 <a href="#tab=graph&taskId={{encodedTaskId}}&hideDone=1" class="btn btn-info btn-xs" title="View graph" data-toggle="tooltip"><i class="fa fa-sitemap"></i></a>
+                {{#error}}<button class="btn btn-danger btn-xs showError" title="Show error" data-toggle="tooltip"><i class="fa fa-bug"></i></button>{{/error}}
+                {{#error}}<button class="btn btn-warning btn-xs forgiveFailures" title="Forgive failures" data-toggle="tooltip"><i class="fa fa-ambulance"></i></button>{{/error}}
                 {{#re_enable}}<button class="btn btn-danger btn-xs showError" title="Show error" data-toggle="tooltip"><i class="fa fa-bug"></i></button>{{/re_enable}}
                 {{#re_enable}}<a class="btn btn-warning btn-xs re-enable-button" title="Re-enable" data-toggle="tooltip" data-task-id="{{taskId}}">Re-enable</a>{{/re_enable}}
-                {{#view_logs_able}}
-                  <a href='https://app.datadoghq.com/logs?event&index=main&live=true&query=%40trace_id%3A"{{taskParamsObj.trace_id}}"&stream_sort=desc'
-                    class="btn btn-primary btn-xs"
-                    title="View Logs"
-                    target="_blank"
-                    data-toggle="tooltip">
-                      <i class="fa fa-book"></i>
-                  </a>
-                {{/view_logs_able}}
-                {{#view_graph_able}}
-                  <a href="https://dashboards.k8s.actioniq.co/d/th5tqMEma/historical-luigi-task-runtimes?orgId=1&var-env=prod&var-cust_id={{taskParamsObj.customer_id}}&var-luigi_task_type={{taskName}}"
-                    class="btn btn-warning btn-xs"
-                    title="View Stats"
-                    target="_blank"
-                    data-toggle="tooltip">
-                      <i class="fa fa-pie-chart"></i>
-                  </a>
-                {{/view_graph_able}}
-                {{#acceptsMessages}}
-                  <button class="btn btn-danger btn-xs schedulerMessage"
-                    title="Kill Task"
-                    data-toggle="tooltip"
-                    data-task-id="{{taskId}}"
-                    data-display-name="{{displayName}}"
-                    data-worker="{{workerIdRunning}}">
-                      <i class="fa fa-gavel"></i>
-                  </button>
-                {{/acceptsMessages}}
                 {{#mark_as_done}}<a class="btn btn-success btn-xs markAsDone" title="Mark as done" data-toggle="tooltip" data-task-id="{{taskId}}"><i class="fa fa-fast-forward"></i></a>{{/mark_as_done}}
+                {{#trackingUrl}}<a target="_blank" href="{{trackingUrl}}" class="btn btn-primary btn-xs" title="Track Progress" data-toggle="tooltip"><i class="fa fa-eye"></i></a>{{/trackingUrl}}
+                {{#statusMessage}}<button class="btn btn-primary btn-xs statusMessage" title="Status message" data-toggle="tooltip" data-task-id="{{taskId}}" data-display-name="{{displayName}}"><i class="fa fa-comment"></i></button>{{/statusMessage}}
+                {{^statusMessage}}
+                  {{#progressPercentage}}<button class="btn btn-primary btn-xs statusMessage" title="Status message" data-toggle="tooltip" data-task-id="{{taskId}}" data-display-name="{{displayName}}"><i class="fa fa-comment"></i></button>
+                  {{/progressPercentage}}
+                {{/statusMessage}}
+                {{#acceptsMessages}}<button class="btn btn-default btn-xs schedulerMessage" title="Send message" data-toggle="tooltip" data-task-id="{{taskId}}" data-display-name="{{displayName}}" data-worker="{{workerIdRunning}}"><i class="fa fa-paper-plane"></i></button>{{/acceptsMessages}}
             </div>
         </script>
         <script type="text/template" name="errorTemplate">
@@ -381,6 +362,14 @@
           </div>
         </script>
 
+        <script type="text/template" name="topNavbarItem">
+          <li>
+            <a class="js-nav-link" href="{{href}}" {{#dataTab}}data-tab="{{dataTab}}"{{/dataTab}}>
+              {{label}}
+            </a>
+          </li>
+        </script>
+
     </head>
     <body class="skin-green-light fixed">
         <div class="modal fade" id="errorModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true">
@@ -407,7 +396,7 @@
                             </button>
                         </div>
                         <div class="collapse navbar-collapse">
-                            <ul class="nav navbar-nav">
+                            <ul class="nav navbar-nav" id="topNavbar">
                                 <li><a class="js-nav-link" href="#tab=tasks" data-tab="taskList">Task List</a></li>
                                 <li><a class="js-nav-link" href="#tab=graph" data-tab="dependencyGraph">Dependency Graph</a></li>
                                 <li><a class="js-nav-link" href="#tab=workers" data-tab="workerList">Workers</a></li>
