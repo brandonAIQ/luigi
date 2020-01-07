@@ -56,14 +56,6 @@ from luigi.parameter import ParameterVisibility
 
 from luigi.metrics import MetricsCollectors
 
-
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Table, Column, Integer, String
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-Base = declarative_base()
-
 logger = logging.getLogger(__name__)
 
 UPSTREAM_RUNNING = 'UPSTREAM_RUNNING'
@@ -143,9 +135,6 @@ class scheduler(Config):
 
     batch_emails = parameter.BoolParameter(default=False, description="Send e-mails in batches rather than immediately")
 
-    use_mysql_state = parameter.BoolParameter(default=False, description="Use experimental MySQL db to back Luigi state")
-    mysql_target = parameter.Parameter(default="", description="mysql://user:pass@host:port/db -- use with MySQL state")
-
     # Jobs are disabled if we see more than retry_count failures in disable_window seconds.
     # These disables last for disable_persist seconds.
     disable_window = parameter.IntParameter(default=3600)
@@ -164,6 +153,12 @@ class scheduler(Config):
     send_messages = parameter.BoolParameter(default=True)
 
     metrics_collector = parameter.EnumParameter(enum=MetricsCollectors, default=MetricsCollectors.default)
+
+    stable_done_cooldown_secs = parameter.IntParameter(default=10,
+                                                       description="Sets cooldown period to avoid running the same task twice")
+    """
+    Sets a cooldown period in seconds after a task was completed, during this period the same task will not accepted by the scheduler.
+    """
 
     def _get_retry_policy(self):
         return RetryPolicy(self.retry_count, self.disable_hard_timeout, self.disable_window)
@@ -403,7 +398,7 @@ class Worker(object):
 
     def get_tasks(self, state, *statuses):
         num_self_tasks = len(self.tasks)
-        num_state_tasks = sum(len(list(state.get_active_tasks_by_status(status))) for status in statuses)
+        num_state_tasks = sum(len(state._status_tasks[status]) for status in statuses)
         if num_self_tasks < num_state_tasks:
             return six.moves.filter(lambda task: task.status in statuses, self.tasks)
         else:
@@ -448,269 +443,9 @@ class Worker(object):
         return self.id
 
 
-class DBTask(Base):
-
-    __tablename__ = 'luigi_task'
-
-    task_id = Column(String(255), primary_key=True)
-    status = Column(String(100))
-    pickled = Column(String(10000))
-
-
-class MySqlTaskState(object):
-    """
-    Keep track of the current state and handle persistance.
-
-    The point of this class is to enable other ways to keep state, eg. by using a database
-    These will be implemented by creating an abstract base class that this and other classes
-    inherit from.
-    """
-
-    def __init__(self, mysql_target):
-        from sqlalchemy.pool import NullPool
-        self.engine = create_engine(mysql_target, poolclass=NullPool)
-        Base.metadata.create_all(self.engine)
-        self.session = sessionmaker(bind=self.engine)
-
-        self._task_batchers = {}
-        self._active_workers = {}  # map from id to a Worker object
-        self._metrics_collector = None
-
-    def dump(self):
-        pass # always persisted
-
-    def load(self):
-        pass # always persisted
-
-    def get_active_tasks(self):
-        session = self.session()
-        db_res = session.query(DBTask).all()
-        session.close()
-        return (pickle.loads(t.pickled) for t in db_res)
-
-    def get_active_tasks_by_status(self, *statuses):
-        session = self.session()
-        db_res = session.query(DBTask).filter(DBTask.status.in_(statuses)).all()
-        session.close()
-        res = [pickle.loads(t.pickled) for t in db_res]
-        return res
-
-    def get_active_task_count_for_status(self, status):
-        if status:
-            session = self.session()
-            db_res = session.query(DBTask).filter(DBTask.status == status).count()
-            session.close()
-            return db_res
-        else:
-            session = self.session()
-            db_res = session.query(DBTask).count()
-            session.close()
-            return db_res
-
-    def get_batch_running_tasks(self, batch_id):
-        assert batch_id is not None
-        return [
-            task for task in self.get_active_tasks_by_status(BATCH_RUNNING)
-            if task.batch_id == batch_id
-        ]
-
-    def set_batcher(self, worker_id, family, batcher_args, max_batch_size):
-        self._task_batchers.setdefault(worker_id, {})
-        self._task_batchers[worker_id][family] = (batcher_args, max_batch_size)
-
-    def get_batcher(self, worker_id, family):
-        return self._task_batchers.get(worker_id, {}).get(family, (None, 1))
-
-    def num_pending_tasks(self):
-        session = self.session()
-        db_res = session.query(DBTask).filter(DBTask.status.in_([PENDING, RUNNING])).count()
-        session.close()
-        return db_res
-
-    def get_task(self, task_id, default=None, setdefault=None):
-        if self.has_task(task_id):
-            session = self.session()
-            db_task = session.query(DBTask).filter(DBTask.task_id == task_id).first()
-            session.close()
-            return pickle.loads(db_task.pickled)
-        elif setdefault:
-            new_task = DBTask(task_id=task_id, status=setdefault.status, pickled=pickle.dumps(setdefault))
-            session = self.session()
-            session.add(new_task)
-            session.commit()
-            session.close()
-            return setdefault
-        else:
-            return default
-
-    def has_task(self, task_id):
-        session = self.session()
-        db_res = session.query(DBTask).filter(DBTask.task_id == task_id).count() > 0
-        session.close()
-        return db_res
-
-    def re_enable(self, task, config=None):
-        task.scheduler_disable_time = None
-        task.failures.clear()
-        if config:
-            self.set_status(task, FAILED, config)
-            task.failures.clear()
-
-    def set_batch_running(self, task, batch_id, worker_id):
-        task.batch_id = batch_id
-        task.worker_running = worker_id
-        task.resources_running = task.resources
-        task.time_running = time.time()
-        self.set_status(task, BATCH_RUNNING)
-
-    def set_status(self, task, new_status, config=None):
-        if new_status == FAILED:
-            assert config is not None
-
-        if new_status == DISABLED and task.status in (RUNNING, BATCH_RUNNING):
-            return
-
-        remove_on_failure = task.batch_id is not None and not task.batchable
-
-        if task.status == DISABLED:
-            if new_status == DONE:
-                self.re_enable(task)
-
-            # don't allow workers to override a scheduler disable
-            elif task.scheduler_disable_time is not None and new_status != DISABLED:
-                return
-
-        if task.status == RUNNING and task.batch_id is not None and new_status != RUNNING:
-            for batch_task in self.get_batch_running_tasks(task.batch_id):
-                self.set_status(batch_task, new_status, config)
-                batch_task.batch_id = None
-            task.batch_id = None
-
-        if new_status == FAILED and task.status != DISABLED:
-            task.add_failure()
-            if task.has_excessive_failures():
-                task.scheduler_disable_time = time.time()
-                new_status = DISABLED
-                if not config.batch_emails:
-                    notifications.send_error_email(
-                        'Luigi Scheduler: DISABLED {task} due to excessive failures'.format(task=task.id),
-                        '{task} failed {failures} times in the last {window} seconds, so it is being '
-                        'disabled for {persist} seconds'.format(
-                            failures=task.retry_policy.retry_count,
-                            task=task.id,
-                            window=config.disable_window,
-                            persist=config.disable_persist,
-                        ))
-        elif new_status == DISABLED:
-            task.scheduler_disable_time = None
-
-        if new_status != task.status:
-            session = self.session()
-            db_task = session.query(DBTask).filter(DBTask.task_id == task.id).first()
-            db_task.status = new_status
-            session.commit()
-            session.close()
-            task.status = new_status
-            task.updated = time.time()
-            self.update_metrics(task, config)
-
-        if new_status == FAILED:
-            task.retry = time.time() + config.retry_delay
-            if remove_on_failure:
-                task.remove = time.time()
-
-    def fail_dead_worker_task(self, task, config, assistants):
-        # If a running worker disconnects, tag all its jobs as FAILED and subject it to the same retry logic
-        if task.status in (BATCH_RUNNING, RUNNING) and task.worker_running and task.worker_running not in task.stakeholders | assistants:
-            logger.info("Task %r is marked as running by disconnected worker %r -> marking as "
-                        "FAILED with retry delay of %rs", task.id, task.worker_running,
-                        config.retry_delay)
-            task.worker_running = None
-            self.set_status(task, FAILED, config)
-            task.retry = time.time() + config.retry_delay
-
-    def update_status(self, task, config):
-        # Mark tasks with no remaining active stakeholders for deletion
-        if (not task.stakeholders) and (task.remove is None) and (task.status != RUNNING):
-            # We don't check for the RUNNING case, because that is already handled
-            # by the fail_dead_worker_task function.
-            logger.debug("Task %r has no stakeholders anymore -> might remove "
-                         "task in %s seconds", task.id, config.remove_delay)
-            task.remove = time.time() + config.remove_delay
-
-        # Re-enable task after the disable time expires
-        if task.status == DISABLED and task.scheduler_disable_time is not None:
-            if time.time() - task.scheduler_disable_time > config.disable_persist:
-                self.re_enable(task, config)
-
-        # Reset FAILED tasks to PENDING if max timeout is reached, and retry delay is >= 0
-        if task.status == FAILED and config.retry_delay >= 0 and task.retry < time.time():
-            self.set_status(task, PENDING, config)
-
-    def may_prune(self, task):
-        return task.remove and time.time() >= task.remove
-
-    def inactivate_tasks(self, delete_tasks):
-        # The terminology is a bit confusing: we used to "delete" tasks when they became inactive,
-        # but with a pluggable state storage, you might very well want to keep some history of
-        # older tasks as well. That's why we call it "inactivate" (as in the verb)
-        for task in delete_tasks:
-            session = self.session()
-            db_task = session.query(DBTask).filter(DBTask.task_id == task.id).first()
-            session.delete(db_task)
-            session.commit()
-            session.close()
-
-    def get_active_workers(self, last_active_lt=None, last_get_work_gt=None):
-        for worker in six.itervalues(self._active_workers):
-            if last_active_lt is not None and worker.last_active >= last_active_lt:
-                continue
-            last_get_work = worker.last_get_work
-            if last_get_work_gt is not None and (
-                            last_get_work is None or last_get_work <= last_get_work_gt):
-                continue
-            yield worker
-
-    def get_assistants(self, last_active_lt=None):
-        return filter(lambda w: w.assistant, self.get_active_workers(last_active_lt))
-
-    def get_worker_ids(self):
-        return self._active_workers.keys()  # only used for unit tests
-
-    def get_worker(self, worker_id):
-        return self._active_workers.setdefault(worker_id, Worker(worker_id))
-
-    def inactivate_workers(self, delete_workers):
-        # Mark workers as inactive
-        for worker in delete_workers:
-            self._active_workers.pop(worker)
-        self._remove_workers_from_tasks(delete_workers)
-
-    def _remove_workers_from_tasks(self, workers, remove_stakeholders=True):
-        for task in self.get_active_tasks():
-            if remove_stakeholders:
-                task.stakeholders.difference_update(workers)
-            task.workers -= workers
-
-    def disable_workers(self, worker_ids):
-        self._remove_workers_from_tasks(worker_ids, remove_stakeholders=False)
-        for worker_id in worker_ids:
-            worker = self.get_worker(worker_id)
-            worker.disabled = True
-            worker.tasks.clear()
-
-    def update_metrics(self, task, config):
-        if task.status == DISABLED:
-            self._metrics_collector.handle_task_disabled(task, config)
-        elif task.status == DONE:
-            self._metrics_collector.handle_task_done(task)
-        elif task.status == FAILED:
-            self._metrics_collector.handle_task_failed(task)
-
-
 class SimpleTaskState(object):
     """
-    Keep track of the current state and handle persistance.
+    Keep track of the current state and handle persistence.
 
     The point of this class is to enable other ways to keep state, eg. by using a database
     These will be implemented by creating an abstract base class that this and other classes
@@ -736,7 +471,7 @@ class SimpleTaskState(object):
     def dump(self):
         try:
             with open(self._state_path, 'wb') as fobj:
-                pickle.dump(self.get_state(), fobj, protocol=2)
+                pickle.dump(self.get_state(), fobj)
         except IOError:
             logger.warning("Failed saving scheduler state", exc_info=1)
         else:
@@ -971,11 +706,7 @@ class Scheduler(object):
         :param task_history_impl: ignore config and use this object as the task history
         """
         self._config = config or scheduler(**kwargs)
-
-        if self._config.use_mysql_state:
-            self._state = MySqlTaskState(self._config.mysql_target)
-        else:
-            self._state = SimpleTaskState(self._config.state_path)
+        self._state = SimpleTaskState(self._config.state_path)
 
         if task_history_impl:
             self._task_history = task_history_impl
@@ -1124,6 +855,10 @@ class Scheduler(object):
         if task is None or (task.status != RUNNING and not worker.enabled):
             return
 
+        # Ignore claims that the task is PENDING if it very recently was marked as DONE.
+        if status == PENDING and task.status == DONE and (time.time() - task.updated) < self._config.stable_done_cooldown_secs:
+            return
+
         # for setting priority, we'll sometimes create tasks with unset family and params
         if not task.family:
             task.family = family
@@ -1227,9 +962,6 @@ class Scheduler(object):
             self._state.get_worker(worker_id).tasks.add(task)
             task.runnable = runnable
 
-        self._state.inactivate_tasks([task])
-        self._state.get_task(task_id, setdefault=task)
-
     @rpc_method()
     def announce_scheduling_failure(self, task_name, family, params, expl, owners, **kwargs):
         if not self._config.batch_emails:
@@ -1282,6 +1014,10 @@ class Scheduler(object):
             task = self._state.get_task(task_id)
             response = task.scheduler_message_responses.pop(message_id, None)
         return {"response": response}
+
+    @rpc_method()
+    def has_task_history(self):
+        return self._config.record_task_history
 
     @rpc_method()
     def is_pause_enabled(self):
@@ -1378,10 +1114,8 @@ class Scheduler(object):
         running_tasks = []
 
         upstream_status_table = {}
-        all_task_dict = {task.id: task for task in self._state.get_active_tasks()}
-
         for task in worker.get_tasks(self._state, RUNNING):
-            if self._upstream_status(task.id, upstream_status_table, all_task_dict) == UPSTREAM_DISABLED:
+            if self._upstream_status(task.id, upstream_status_table) == UPSTREAM_DISABLED:
                 continue
             # Return a list of currently running tasks to the client,
             # makes it easier to troubleshoot
@@ -1392,7 +1126,7 @@ class Scheduler(object):
                 running_tasks.append(more_info)
 
         for task in worker.get_tasks(self._state, PENDING, FAILED):
-            if self._upstream_status(task.id, upstream_status_table, all_task_dict) == UPSTREAM_DISABLED:
+            if self._upstream_status(task.id, upstream_status_table) == UPSTREAM_DISABLED:
                 continue
             num_pending += 1
             num_unique_pending += int(len(task.workers) == 1)
@@ -1473,8 +1207,6 @@ class Scheduler(object):
         tasks = list(relevant_tasks)
         tasks.sort(key=self._rank, reverse=True)
 
-        logger.info("get work task list: {}".format(tasks))
-
         for task in tasks:
             if (best_task and batched_params and task.family == best_task.family and
                     len(batched_tasks) < max_batch_size and task.is_batchable() and all(
@@ -1495,7 +1227,8 @@ class Scheduler(object):
                 in_workers = (assistant and task.runnable) or worker_id in task.workers
                 if in_workers and self._has_resources(task.resources, used_resources):
                     best_task = task
-                    batch_param_names, max_batch_size = self._state.get_batcher(worker_id, task.family)
+                    batch_param_names, max_batch_size = self._state.get_batcher(
+                        worker_id, task.family)
                     if batch_param_names and task.is_batchable():
                         try:
                             batched_params = {
@@ -1520,8 +1253,6 @@ class Scheduler(object):
                                 greedy_resources[resource] += amount
 
                             break
-
-        logger.info("BEST TASK: {}".format(best_task))
 
         reply = self.count_pending(worker_id)
 
@@ -1549,9 +1280,6 @@ class Scheduler(object):
             best_task.time_running = time.time()
             self._update_task_history(best_task, RUNNING, host=host)
 
-            self._state.inactivate_tasks([best_task])
-            self._state.get_task(best_task.id, setdefault=best_task)
-
             reply['task_id'] = best_task.id
             reply['task_family'] = best_task.family
             reply['task_module'] = getattr(best_task, 'module', None)
@@ -1568,15 +1296,15 @@ class Scheduler(object):
         worker = self._update_worker(worker_id)
         return {"rpc_messages": worker.fetch_rpc_messages()}
 
-    def _upstream_status(self, task_id, upstream_status_table, all_task_dict):
+    def _upstream_status(self, task_id, upstream_status_table):
         if task_id in upstream_status_table:
             return upstream_status_table[task_id]
-        elif task_id in all_task_dict.keys():
+        elif self._state.has_task(task_id):
             task_stack = [task_id]
 
             while task_stack:
                 dep_id = task_stack.pop()
-                dep = all_task_dict[dep_id]
+                dep = self._state.get_task(dep_id)
                 if dep:
                     if dep.status == DONE:
                         continue
@@ -1596,7 +1324,9 @@ class Scheduler(object):
                         upstream_status_table[dep_id] = status
             return upstream_status_table[dep_id]
 
-    def _serialize_task(self, task, include_deps=True, deps=None):
+    def _serialize_task(self, task_id, include_deps=True, deps=None):
+        task = self._state.get_task(task_id)
+
         ret = {
             'display_name': task.pretty_id,
             'status': task.status,
@@ -1685,7 +1415,7 @@ class Scheduler(object):
                 deps = dep_func(task)
                 if not include_done:
                     deps = list(self._filter_done(deps))
-                serialized[task_id] = self._serialize_task(task, deps=deps)
+                serialized[task_id] = self._serialize_task(task_id, deps=deps)
                 for dep in sorted(deps):
                     if dep not in seen:
                         seen.add(dep)
@@ -1742,14 +1472,9 @@ class Scheduler(object):
                 return all(term in t.pretty_id for term in terms)
 
         tasks = self._state.get_active_tasks_by_status(status) if status else self._state.get_active_tasks()
-        all_task_dict = {task.id: task for task in self._state.get_active_tasks()}
         for task in filter(filter_func, tasks):
-            if task.status != PENDING or not upstream_status or upstream_status == self._upstream_status(
-                task.id,
-                upstream_status_table,
-                all_task_dict
-            ):
-                serialized = self._serialize_task(task, include_deps=False)
+            if task.status != PENDING or not upstream_status or upstream_status == self._upstream_status(task.id, upstream_status_table):
+                serialized = self._serialize_task(task.id, include_deps=False)
                 result[task.id] = serialized
         if limit and len(result) > (max_shown_tasks or self._config.max_shown_tasks):
             return {'num_tasks': len(result)}
@@ -1780,7 +1505,7 @@ class Scheduler(object):
             running = collections.defaultdict(dict)
             for task in self._state.get_active_tasks_by_status(RUNNING):
                 if task.worker_running:
-                    running[task.worker_running][task.id] = self._serialize_task(task, include_deps=False)
+                    running[task.worker_running][task.id] = self._serialize_task(task.id, include_deps=False)
 
             num_pending = collections.defaultdict(int)
             num_uniques = collections.defaultdict(int)
@@ -1815,7 +1540,7 @@ class Scheduler(object):
             for task in self._state.get_active_tasks_by_status(RUNNING):
                 if task.status == RUNNING and task.resources:
                     for resource, amount in six.iteritems(task.resources):
-                        consumers[resource][task.id] = self._serialize_task(task, include_deps=False)
+                        consumers[resource][task.id] = self._serialize_task(task.id, include_deps=False)
             for resource in resources:
                 tasks = consumers[resource['name']]
                 resource['num_consumer'] = len(tasks)
@@ -1846,7 +1571,7 @@ class Scheduler(object):
         result = collections.defaultdict(dict)
         for task in self._state.get_active_tasks():
             if task.id.find(task_str) != -1:
-                serialized = self._serialize_task(task, include_deps=False)
+                serialized = self._serialize_task(task.id, include_deps=False)
                 result[task.status][task.id] = serialized
         return result
 
@@ -1856,7 +1581,7 @@ class Scheduler(object):
         task = self._state.get_task(task_id)
         if task and task.status == DISABLED and task.scheduler_disable_time:
             self._state.re_enable(task, self._config)
-            serialized = self._serialize_task(task)
+            serialized = self._serialize_task(task_id)
         return serialized
 
     @rpc_method()
