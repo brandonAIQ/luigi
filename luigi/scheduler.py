@@ -845,11 +845,11 @@ class Scheduler(object):
 
         return task.priority, -task.time
 
-    def _schedulable(self, task):
+    def _schedulable(self, task, all_tasks):
         if task.status != PENDING:
             return False
         for dep in task.deps:
-            dep_task = self._state.get_task(dep, default=None)
+            dep_task = all_tasks.get(dep)
             if dep_task is None or dep_task.status != DONE:
                 return False
         return True
@@ -937,21 +937,21 @@ class Scheduler(object):
         if assistant:
             self.add_worker(worker_id, [('assistant', assistant)])
 
-        batched_params, unbatched_params, batched_tasks, max_batch_size = None, None, [], 1
-        best_task = None
-        if current_tasks is not None:
-            ct_set = set(current_tasks)
-            for task in sorted(self._state.get_active_tasks_by_status(RUNNING), key=self._rank):
-                if task.worker_running == worker_id and task.id not in ct_set:
-                    best_task = task
-
         if current_tasks is not None:
             # batch running tasks that weren't claimed since the last get_work go back in the pool
             self._reset_orphaned_batch_running_tasks(worker_id)
 
-        greedy_resources = collections.defaultdict(int)
-
         all_tasks = self._state.get_active_tasks()
+
+        batched_params, unbatched_params, batched_tasks, max_batch_size = None, None, [], 1
+        best_task = None
+        if current_tasks is not None:
+            ct_set = set(current_tasks)
+            for task in sorted(filter(lambda t: t.status == RUNNING, all_tasks), key=self._rank):
+                if task.worker_running == worker_id and task.id not in ct_set:
+                    best_task = task
+
+        greedy_resources = collections.defaultdict(int)
 
         worker = self._state.get_worker(worker_id)
         if self._paused:
@@ -961,12 +961,12 @@ class Scheduler(object):
             used_resources = collections.defaultdict(int)
             greedy_workers = dict()  # If there's no resources, then they can grab any task
         else:
-            relevant_tasks = self._state.get_active_tasks_by_status(PENDING, RUNNING)
+            relevant_tasks = filter(lambda t: t.status in (PENDING, RUNNING), all_tasks)
             used_resources = self._used_resources()
             activity_limit = time.time() - self._config.worker_disconnect_delay
             active_workers = self._state.get_active_workers(last_get_work_gt=activity_limit)
-            greedy_workers = dict((worker.id, worker.info.get('workers', 1))
-                                  for worker in active_workers)
+            greedy_workers = dict((worker.id, worker.info.get('workers', 1)) for worker in active_workers)
+
         tasks = list(relevant_tasks)
         tasks.sort(key=self._rank, reverse=True)
 
@@ -974,7 +974,7 @@ class Scheduler(object):
             if (best_task and batched_params and task.family == best_task.family and
                     len(batched_tasks) < max_batch_size and task.is_batchable() and all(
                     task.params.get(name) == value for name, value in unbatched_params.items()) and
-                    task.resources == best_task.resources and self._schedulable(task)):
+                    task.resources == best_task.resources and self._schedulable(task, all_tasks)):
                 for name, params in batched_params.items():
                     params.append(task.params.get(name))
                 batched_tasks.append(task)
@@ -986,7 +986,7 @@ class Scheduler(object):
                 for resource, amount in six.iteritems((getattr(task, 'resources_running', task.resources) or {})):
                     greedy_resources[resource] += amount
 
-            if self._schedulable(task) and self._has_resources(task.resources, greedy_resources):
+            if self._schedulable(task, {t.id: t for t in all_tasks}) and self._has_resources(task.resources, greedy_resources):
                 in_workers = (assistant and task.runnable) or worker_id in task.workers
                 if in_workers and self._has_resources(task.resources, used_resources):
                     best_task = task
