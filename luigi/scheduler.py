@@ -392,15 +392,15 @@ class Worker(object):
         if self.last_active + config.worker_disconnect_delay < time.time():
             return True
 
-    def get_tasks(self, state, *statuses):
+    def get_tasks(self, all_tasks, *statuses):
         num_self_tasks = len(self.tasks)
-        num_state_tasks = len(list(state.get_active_tasks_by_status(*statuses)))
+        num_state_tasks = len(filter(lambda t: t.status in statuses, all_tasks))
         if num_self_tasks < num_state_tasks:
             return six.moves.filter(lambda task: task.status in statuses, self.tasks)
         else:
-            return six.moves.filter(lambda task: self.id in task.workers, state.get_active_tasks_by_status(*statuses))
+            return six.moves.filter(lambda task: self.id in task.workers, filter(lambda t: t.status in statuses, all_tasks))
 
-    def is_trivial_worker(self, state):
+    def is_trivial_worker(self, all_tasks):
         """
         If it's not an assistant having only tasks that are without
         requirements.
@@ -409,7 +409,7 @@ class Worker(object):
         """
         if self.assistant:
             return False
-        return all(not task.resources for task in self.get_tasks(state, PENDING))
+        return all(not task.resources for task in self.get_tasks(all_tasks, PENDING))
 
     @property
     def assistant(self):
@@ -868,14 +868,14 @@ class Scheduler(object):
             self._state.set_status(task, PENDING)
 
     @rpc_method()
-    def count_pending(self, worker):
+    def count_pending(self, all_tasks, worker):
         worker_id, worker = worker, self._state.get_worker(worker)
 
         num_pending, num_unique_pending, num_pending_last_scheduled = 0, 0, 0
         running_tasks = []
 
         upstream_status_table = {}
-        for task in worker.get_tasks(self._state, RUNNING):
+        for task in worker.get_tasks(all_tasks, RUNNING):
             if self._upstream_status(task.id, upstream_status_table) == UPSTREAM_DISABLED:
                 continue
             # Return a list of currently running tasks to the client,
@@ -886,7 +886,7 @@ class Scheduler(object):
                 more_info.update(other_worker.info)
                 running_tasks.append(more_info)
 
-        for task in worker.get_tasks(self._state, PENDING, FAILED):
+        for task in worker.get_tasks(all_tasks, PENDING, FAILED):
             if self._upstream_status(task.id, upstream_status_table) == UPSTREAM_DISABLED:
                 continue
             num_pending += 1
@@ -951,11 +951,13 @@ class Scheduler(object):
 
         greedy_resources = collections.defaultdict(int)
 
+        all_tasks = self._state.get_active_tasks()
+
         worker = self._state.get_worker(worker_id)
         if self._paused:
             relevant_tasks = []
-        elif worker.is_trivial_worker(self._state):
-            relevant_tasks = worker.get_tasks(self._state, PENDING, RUNNING)
+        elif worker.is_trivial_worker(all_tasks):
+            relevant_tasks = worker.get_tasks(all_tasks, PENDING, RUNNING)
             used_resources = collections.defaultdict(int)
             greedy_workers = dict()  # If there's no resources, then they can grab any task
         else:
@@ -1014,7 +1016,7 @@ class Scheduler(object):
 
                             break
 
-        reply = self.count_pending(worker_id)
+        reply = self.count_pending(all_tasks, worker_id)
 
         if len(batched_tasks) > 1:
             batch_string = '|'.join(task.id for task in batched_tasks)
