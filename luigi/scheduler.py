@@ -916,7 +916,7 @@ class Scheduler(object):
         # TODO: remove tasks that can't be done, figure out if the worker has absolutely
         # nothing it can wait for
 
-        if self._config.prune_on_get_work:
+        #if self._config.prune_on_get_work:
             #self.prune()
 
         assert worker is not None
