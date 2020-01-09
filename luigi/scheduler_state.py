@@ -290,8 +290,8 @@ class DBTask(Base):
     """
     __tablename__ = 'luigi_task_state'
 
-    task_id = Column(String(255), primary_key=True)
-    status = Column(String(100))
+    task_id = Column(String(255), primary_key=True, index=True)
+    status = Column(String(100), index=True)
     pickled = Column(String(10000))
 
 
