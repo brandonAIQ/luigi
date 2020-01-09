@@ -338,18 +338,6 @@ class SqlSchedulerState(SchedulerState):
         session.close()
         return itertools.ifilter(lambda t: t, (self._try_unpickle(t) for t in db_res))
 
-    def get_active_task_count_for_status(self, status):
-        """
-        Gets the number of tasks from the central scheduler that have status `status`
-        """
-        session = self.session()
-        if status:
-            db_res = session.query(DBTask).filter(DBTask.status == status).count()
-        else:
-            db_res = session.query(DBTask).count()
-        session.close()
-        return db_res
-
     def set_batcher(self, worker_id, family, batcher_args, max_batch_size):
         self._task_batchers.setdefault(worker_id, {})
         self._task_batchers[worker_id][family] = (batcher_args, max_batch_size)
