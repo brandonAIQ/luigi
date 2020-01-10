@@ -937,10 +937,10 @@ class Scheduler(object):
         if assistant:
             self.add_worker(worker_id, [('assistant', assistant)])
 
-        if current_tasks is not None:
-            logger.info("Hi")
+        # Disabled at AIQ since we don't use batch running tasks
+        # if current_tasks is not None:
             # batch running tasks that weren't claimed since the last get_work go back in the pool
-            self._reset_orphaned_batch_running_tasks(worker_id)
+            # self._reset_orphaned_batch_running_tasks(worker_id)
 
         all_tasks = self._state.get_active_tasks()
 
