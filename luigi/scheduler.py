@@ -1218,7 +1218,7 @@ class Scheduler(object):
         Query for a subset of tasks by status.
         """
 
-        all_tasks = self._state.get_active_tasks()
+        all_tasks = list(self._state.get_active_tasks())
         status_tasks = filter(lambda t: t.status == status, all_tasks)
 
         if not search:
