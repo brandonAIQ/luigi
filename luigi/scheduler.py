@@ -916,8 +916,8 @@ class Scheduler(object):
         # TODO: remove tasks that can't be done, figure out if the worker has absolutely
         # nothing it can wait for
 
-        #if self._config.prune_on_get_work:
-            #self.prune()
+        if self._config.prune_on_get_work:
+            self.prune()
 
         assert worker is not None
         worker_id = worker
@@ -1117,7 +1117,7 @@ class Scheduler(object):
 
     @rpc_method()
     def graph(self, **kwargs):
-        #self.prune()
+        self.prune()
         serialized = {}
         seen = set()
         for task in self._state.get_active_tasks():
@@ -1193,14 +1193,14 @@ class Scheduler(object):
 
     @rpc_method()
     def dep_graph(self, task_id, include_done=True, **kwargs):
-        #self.prune()
+        self.prune()
         if not self._state.has_task(task_id):
             return {}
         return self._traverse_graph(task_id, include_done=include_done)
 
     @rpc_method()
     def inverse_dep_graph(self, task_id, include_done=True, **kwargs):
-        #self.prune()
+        self.prune()
         if not self._state.has_task(task_id):
             return {}
         inverse_graph = collections.defaultdict(set)
@@ -1225,7 +1225,7 @@ class Scheduler(object):
             pre_count = len(status_tasks)
             if limit and pre_count > count_limit:
                 return {'num_tasks': -1 if upstream_status else pre_count}
-        #self.prune()
+        self.prune()
 
         result = {}
         upstream_status_table = {}  # used to memoize upstream status
@@ -1262,7 +1262,7 @@ class Scheduler(object):
 
     @rpc_method()
     def worker_list(self, include_running=True, **kwargs):
-        #self.prune()
+        self.prune()
         workers = [
             dict(
                 name=worker.id,
@@ -1301,7 +1301,7 @@ class Scheduler(object):
         """
         Resources usage info and their consumers (tasks).
         """
-        #self.prune()
+        self.prune()
         resources = [
             dict(
                 name=resource,
@@ -1340,7 +1340,7 @@ class Scheduler(object):
         :param task_str:
         :return:
         """
-        #self.prune()
+        self.prune()
         result = collections.defaultdict(dict)
         for task in self._state.get_active_tasks():
             if task.id.find(task_str) != -1:
