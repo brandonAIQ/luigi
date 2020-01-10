@@ -510,8 +510,8 @@ class Scheduler(object):
         remove_tasks = []
 
         for task in self._state.get_active_tasks():
-            self._state.fail_dead_worker_task(task, self._config, assistant_ids)
-            self._state.update_status(task, self._config)
+            #self._state.fail_dead_worker_task(task, self._config, assistant_ids)
+            #self._state.update_status(task, self._config)
             if self._state.may_prune(task):
                 logger.info("Removing task %r", task.id)
                 remove_tasks.append(task.id)
