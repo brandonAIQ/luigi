@@ -958,12 +958,15 @@ class Scheduler(object):
 
         worker = self._state.get_worker(worker_id)
         if self._paused:
+            logger.info("WENT TO PLACE A")
             relevant_tasks = []
         elif worker.is_trivial_worker(all_tasks):
+            logger.info("WENT TO PLACE B")
             relevant_tasks = worker.get_tasks(all_tasks, PENDING, RUNNING)
             used_resources = collections.defaultdict(int)
             greedy_workers = dict()  # If there's no resources, then they can grab any task
         else:
+            logger.info("WENT TO PLACE C")
             relevant_tasks = filter(lambda t: t.status in (PENDING, RUNNING), all_tasks)
             used_resources = self._used_resources()
             activity_limit = time.time() - self._config.worker_disconnect_delay
