@@ -503,7 +503,7 @@ class Scheduler(object):
                 logger.debug("Worker %s timed out (no contact for >=%ss)", worker, self._config.worker_disconnect_delay)
                 remove_workers.append(worker.id)
 
-        #self._state.inactivate_workers(remove_workers)
+        self._state.inactivate_workers(remove_workers)
 
     def _prune_tasks(self):
         assistant_ids = {w.id for w in self._state.get_assistants()}
