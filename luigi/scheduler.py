@@ -1226,7 +1226,7 @@ class Scheduler(object):
             pre_count = len(status_tasks)
             if limit and pre_count > count_limit:
                 return {'num_tasks': -1 if upstream_status else pre_count}
-        self.prune()
+        # self.prune()
 
         result = {}
         upstream_status_table = {}  # used to memoize upstream status
