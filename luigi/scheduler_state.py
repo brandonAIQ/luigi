@@ -391,8 +391,7 @@ class SqlSchedulerState(SchedulerState):
             if last_active_lt is not None and worker.last_active >= last_active_lt:
                 continue
             last_get_work = worker.last_get_work
-            if last_get_work_gt is not None and (
-                            last_get_work is None or last_get_work <= last_get_work_gt):
+            if last_get_work_gt is not None and (last_get_work is None or last_get_work <= last_get_work_gt):
                 continue
             yield worker
 
