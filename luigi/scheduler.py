@@ -943,7 +943,6 @@ class Scheduler(object):
             # self._reset_orphaned_batch_running_tasks(worker_id)
 
         all_tasks = list(self._state.get_active_tasks())
-        logger.info("JUST GOT ALL TASKS! LENgth: {}".format(len(all_tasks)))
 
         batched_params, unbatched_params, batched_tasks, max_batch_size = None, None, [], 1
         best_task = None
@@ -953,34 +952,26 @@ class Scheduler(object):
                 if task.worker_running == worker_id and task.id not in ct_set:
                     best_task = task
 
-        logger.info("STAGE 1 BEST TASK: {}".format(best_task))
-
         greedy_resources = collections.defaultdict(int)
 
         worker = self._state.get_worker(worker_id)
         if self._paused:
-            logger.info("WENT TO PLACE A")
             relevant_tasks = []
         elif worker.is_trivial_worker(all_tasks):
-            logger.info("WENT TO PLACE B")
             relevant_tasks = worker.get_tasks(all_tasks, PENDING, RUNNING)
             used_resources = collections.defaultdict(int)
             greedy_workers = dict()  # If there's no resources, then they can grab any task
         else:
-            logger.info("WENT TO PLACE C")
             relevant_tasks = filter(lambda t: t.status in (PENDING, RUNNING), all_tasks)
             used_resources = self._used_resources()
             activity_limit = time.time() - self._config.worker_disconnect_delay
             active_workers = self._state.get_active_workers(last_get_work_gt=activity_limit)
             greedy_workers = dict((worker.id, worker.info.get('workers', 1)) for worker in active_workers)
 
-        logger.info("RELEVANT TASKS: {}".format(relevant_tasks))
-
         tasks = list(relevant_tasks)
         tasks.sort(key=self._rank, reverse=True)
 
         for task in tasks:
-            logger.info("STAGE 2 BEST TASK: {}".format(best_task))
             if (best_task and batched_params and task.family == best_task.family and
                     len(batched_tasks) < max_batch_size and task.is_batchable() and all(
                     task.params.get(name) == value for name, value in unbatched_params.items()) and
@@ -1027,7 +1018,6 @@ class Scheduler(object):
                             break
 
         reply = self.count_pending(all_tasks, worker_id)
-        logger.info("STAGE 3 REPLY: {}".format(reply))
 
         if len(batched_tasks) > 1:
             batch_string = '|'.join(task.id for task in batched_tasks)
@@ -1052,8 +1042,6 @@ class Scheduler(object):
             best_task.resources_running = best_task.resources.copy()
             best_task.time_running = time.time()
             self._update_task_history(best_task, RUNNING, host=host)
-
-            logger.info("WE FOUND BEST TASK: {}".format(best_task))
 
             # Need to call the state store here since we've modified the task
             self._state.persist_task(best_task)
