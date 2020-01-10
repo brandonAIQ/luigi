@@ -942,7 +942,7 @@ class Scheduler(object):
             # batch running tasks that weren't claimed since the last get_work go back in the pool
             # self._reset_orphaned_batch_running_tasks(worker_id)
 
-        all_tasks = self._state.get_active_tasks()
+        all_tasks = list(self._state.get_active_tasks())
         logger.info("JUST GOT ALL TASKS! LENgth: {}".format(len(all_tasks)))
 
         batched_params, unbatched_params, batched_tasks, max_batch_size = None, None, [], 1
