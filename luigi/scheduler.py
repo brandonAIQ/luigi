@@ -509,14 +509,14 @@ class Scheduler(object):
         assistant_ids = {w.id for w in self._state.get_assistants()}
         remove_tasks = []
 
-        for task in self._state.get_active_tasks():
-            #self._state.fail_dead_worker_task(task, self._config, assistant_ids)
-            #self._state.update_status(task, self._config)
-            if self._state.may_prune(task):
-                logger.info("Removing task %r", task.id)
-                remove_tasks.append(task.id)
+        # for task in self._state.get_active_tasks():
+        #     #self._state.fail_dead_worker_task(task, self._config, assistant_ids)
+        #     #self._state.update_status(task, self._config)
+        #     if self._state.may_prune(task):
+        #         logger.info("Removing task %r", task.id)
+        #         remove_tasks.append(task.id)
 
-        self._state.inactivate_tasks(remove_tasks)
+        # self._state.inactivate_tasks(remove_tasks)
 
     def _prune_emails(self):
         if self._config.batch_emails:
