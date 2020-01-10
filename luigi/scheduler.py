@@ -970,6 +970,8 @@ class Scheduler(object):
             active_workers = self._state.get_active_workers(last_get_work_gt=activity_limit)
             greedy_workers = dict((worker.id, worker.info.get('workers', 1)) for worker in active_workers)
 
+        logger.info("RELEVANT TASKS: {}".format(relevant_tasks))
+
         tasks = list(relevant_tasks)
         tasks.sort(key=self._rank, reverse=True)
 
