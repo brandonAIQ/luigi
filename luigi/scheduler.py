@@ -952,6 +952,8 @@ class Scheduler(object):
                 if task.worker_running == worker_id and task.id not in ct_set:
                     best_task = task
 
+        logger.info("STAGE 1 BEST TASK: {}".format(best_task))
+
         greedy_resources = collections.defaultdict(int)
 
         worker = self._state.get_worker(worker_id)
@@ -972,6 +974,7 @@ class Scheduler(object):
         tasks.sort(key=self._rank, reverse=True)
 
         for task in tasks:
+            logger.info("STAGE 2 BEST TASK: {}".format(best_task))
             if (best_task and batched_params and task.family == best_task.family and
                     len(batched_tasks) < max_batch_size and task.is_batchable() and all(
                     task.params.get(name) == value for name, value in unbatched_params.items()) and
@@ -1018,6 +1021,7 @@ class Scheduler(object):
                             break
 
         reply = self.count_pending(all_tasks, worker_id)
+        logger.info("STAGE 3 REPLY: {}".format(reply))
 
         if len(batched_tasks) > 1:
             batch_string = '|'.join(task.id for task in batched_tasks)
@@ -1042,6 +1046,8 @@ class Scheduler(object):
             best_task.resources_running = best_task.resources.copy()
             best_task.time_running = time.time()
             self._update_task_history(best_task, RUNNING, host=host)
+
+            logger.info("WE FOUND BEST TASK: {}".format(best_task))
 
             # Need to call the state store here since we've modified the task
             self._state.persist_task(best_task)
